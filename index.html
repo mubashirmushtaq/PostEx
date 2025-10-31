@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Canteen POS System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SheetJS library for reading XLSX files --><script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #fbfbfb; /* Very Light Blue/Gray */
+        }
+        .spinner {
+            border-top-color: #4f46e5;
+            animation: spin 1s linear infinite;
+        }
+        #refresh-data-button .spinner {
+             border-top-color: #000000;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .qty-btn, .remove-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            transition: background-color 0.2s, transform 0.1s;
+            border: 1px solid #e2e8f0; /* slate-200 */
+            cursor: pointer;
+        }
+        .qty-btn:active, .remove-btn:active {
+            transform: scale(0.9);
+        }
+        .qty-btn {
+            background-color: #f1f5f9; /* slate-100 */
+            color: #334155; /* slate-700 */
+        }
+        .qty-btn:hover {
+            background-color: #e2e8f0; /* slate-200 */
+        }
+        .remove-btn {
+            background-color: #fee2e2; /* red-100 */
+            color: #b91c1c; /* red-700 */
+            border-color: #fecaca; /* red-200 */
+        }
+        .remove-btn:hover {
+             background-color: #fecaca; /* red-200 */
+        }
+        .card {
+            background-color: #ffffff; /* White */
+            border-radius: 0.75rem;
+            border: 1px solid #e5e7eb; /* Gray 200 */
+            box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        }
+        
+        /* Style for the toggle switch background when off */
+        .availability-toggle:not(:checked) + div {
+             background-color: #cbd5e1 !important; /* Slate 300 */
+        }
+
+        /* --- New Date Input Styles --- */
+        .date-input-placeholder {
+            color: transparent;
+        }
+        .date-input-placeholder:focus,
+        .date-input-placeholder:valid {
+            color: #1e293b; /* slate-800 */
+        }
+        input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+            display: none;
+        }
+        input[type="date"]:focus::-webkit-datetime-edit-fields-wrapper,
+        input[type="date"]:valid::-webkit-datetime-edit-fields-wrapper {
+            display: inline-flex;
+        }
+        /* Firefox placeholder text */
+        input[type="date"] {
+             color: transparent;
+        }
+        input[type="date"]:focus,
+        input[type="date"]:valid {
+             color: #1e293b;
+        }
+        /* --- End New Date Input Styles --- */
+
+
+        @media print {
+            body {
+                background: none !important;
+                color: black !important;
+            }
+            body > .container > header,
+            body > .container > #setup-section,
+            body > #toast,
+            #app-section .lg\:col-span-1, /* Hides left and right columns */
+            #app-section .lg\:col-span-2 > div:first-child, /* Hides employee scan */
+            #transaction-log-container, /* Hides transaction log */
+            #app-section .sticky, /* Hides current order */
+            #transaction-log-header .flex,
+            #export-filters,
+            #availability-section { /* Hide availability on print */
+                display: none;
+            }
+            #app-section, #transaction-log-container {
+                display: block !important;
+            }
+             .card, .bg-gray-900\/50 {
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+             }
+             #transaction-log .p-3 {
+                border-bottom: 1px solid #ccc;
+             }
+        }
+    </style>
+</head>
+<body class="text-black">
+    <div class="container mx-auto p-4 md:p-8">
+        
+        <!-- App Title --><header class="mb-10 relative bg-white shadow-md rounded-xl p-4 flex justify-between items-center">
+            <div class="h-10 flex items-center">
+                 <!-- Text-based Logo -->
+                 <span class="text-3xl font-bold text-black tracking-tight">PostEx</span><span class="text-3xl font-bold text-[#92CF50]">.</span>
+            </div>
+            <div class="text-center">
+                 <h1 id="store-name" class="text-2xl md:text-3xl font-bold text-[#044928] tracking-tight">Live Canteen POS System</h1>
+                 <p id="header-subtitle" class="text-sm text-slate-500 mt-1">Connecting to your live Google Sheet...</p>
+            </div>
+            <button id="refresh-data-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold p-3 rounded-full text-sm flex items-center justify-center disabled:opacity-50 transition-colors" title="Refresh Data">
+                <svg id="refresh-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M20 4l-4 4M4 20l4-4"></path></svg>
+                <div id="refresh-spinner" class="spinner w-5 h-5 rounded-full border-2 hidden"></div>
+            </button>
+        </header>
+
+        <!-- Setup Section (Initially hidden, shown on error) --><div id="setup-section" class="card p-6 rounded-xl mb-8 max-w-2xl mx-auto hidden">
+             <div class="text-center">
+                <h2 class="text-2xl font-semibold mb-4 text-red-500">Connection Failed</h2>
+                <p class="text-slate-600 mb-4">Could not load data from the script. Please check the troubleshooting steps in the Google Apps Script file and try deploying your script again.</p>
+            </div>
+        </div>
+        
+        <div id="loading-indicator" class="flex justify-center items-center py-16">
+            <div class="spinner w-16 h-16 rounded-full border-4"></div>
+        </div>
+
+
+        <!-- Main Application Section --><div id="app-section" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                
+                <!-- Left Column: Availability -->
+                <div class="hidden lg:block lg:col-span-1">
+                    <div class="card p-6 rounded-xl">
+                         <h2 class="text-xl font-semibold mb-4 text-slate-700">Item Availability</h2>
+                        <div id="availability-list" class="space-y-3 max-h-[calc(100vh-200px)] overflow-y-auto pr-2">
+                            <!-- Availability toggles will be injected here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Center Column: Menu & Employee --><div class="lg:col-span-2">
+                    <!-- Employee Scan --><div class="card p-6 rounded-xl mb-8">
+                        <h2 class="text-xl font-semibold mb-4 text-slate-700">Employee Scan</h2>
+                        <div id="rfid-scan-area">
+                            <div class="flex gap-4">
+                                <input type="text" id="rfid-input" placeholder="Enter RFID UID..." class="flex-grow bg-white border border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-[#92CF50] transition text-slate-800">
+                                <button id="find-employee-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                    Find
+                                </button>
+                            </div>
+                        </div>
+                        <div id="employee-details" class="mt-4 p-4 bg-slate-100 rounded-lg hidden">
+                            <!-- Employee details shown here --></div>
+                         <div id="employee-actions" class="hidden mt-4">
+                            <button id="clear-employee-button" class="w-full bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold py-2 px-4 rounded-lg transition">Clear Employee</button>
+                        </div>
+                    </div>
+
+                    <!-- Food Menu --><div class="card p-6 rounded-xl">
+                        <h2 class="text-xl font-semibold mb-4 text-slate-700">Available Menu</h2>
+                        <div id="food-menu-grid" class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <!-- Menu items populated here --></div>
+                    </div>
+                    
+                    <!-- Transaction Log (MOVED HERE) --><div id="transaction-log-container" class="card p-6 rounded-xl mt-8">
+                        <div id="transaction-log-header" class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold text-slate-700">Transactions</h2>
+                            <div class="flex items-center gap-2">
+                                <button id="preview-invoice-button" class="bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold p-2 rounded-full text-sm flex items-center gap-2 transition" title="Preview Last Invoice">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                                </button>
+                                <button id="print-log-button" class="bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold p-2 rounded-full text-sm flex items-center gap-2 transition" title="Print Log">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                                </button>
+                                <button id="export-log-button" class="bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold p-2 rounded-full text-sm flex items-center gap-2 transition" title="Export to Excel">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="export-filters" class="mb-4 p-3 bg-slate-100 rounded-lg flex flex-wrap gap-x-4 gap-y-2 items-center text-sm">
+                            <span class="font-semibold text-slate-600 shrink-0">Export by Date:</span>
+                            <div class="relative">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                </div>
+                                <input type="date" id="start-date" class="bg-white border border-slate-300 rounded-lg pl-9 pr-2 py-1 text-slate-700 date-input-placeholder">
+                            </div>
+                            <div class="relative">
+                                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                </div>
+                                <input type="date" id="end-date" class="bg-white border border-slate-300 rounded-lg pl-9 pr-2 py-1 text-slate-700 date-input-placeholder">
+                            </div>
+                        </div>
+                        <div id="transaction-log" class="space-y-2 max-h-80 overflow-y-auto">
+                           <p class="text-center text-slate-400">No transactions yet.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Current Order --><div class="lg:col-span-1">
+                    <!-- Current Order --><div class="card p-6 rounded-xl mb-8 sticky top-8">
+                        <h2 class="text-xl font-semibold mb-4 text-slate-700">Current Order</h2>
+                        <div id="current-order-list" class="divide-y divide-slate-200 mb-4 min-h-[100px]">
+                            <!-- Order items shown here --></div>
+                        <div class="border-t border-slate-200 pt-4 space-y-2">
+                            <div class="flex justify-between text-sm text-slate-500"><span>Total Items</span><span id="num-items">0</span></div>
+                            <div class="flex justify-between font-medium text-slate-600"><span>Subtotal</span><span id="subtotal">Rs. 0</span></div>
+                            <div class="flex justify-between items-center text-sm text-amber-600">
+                                <span>Discount</span>
+                                <div class="flex items-center gap-2">
+                                    <button id="manual-discount-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold px-2 py-1 rounded-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed transition-colors" disabled>Apply 100%</button>
+                                    <span id="discount" class="font-medium">Rs. 0</span>
+                                </div>
+                            </div>
+                            <div class="flex justify-between text-xl font-bold text-black"><span>Total</span><span id="total">Rs. 0</span></div>
+                        </div>
+                        <div class="mt-6 flex gap-2">
+                            <button id="clear-order-button" class="w-1/3 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2 px-2 rounded-lg text-sm transition-colors">Clear</button>
+                            <button id="confirm-purchase-button" class="w-2/3 bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Confirm Purchase</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+             <!-- Bottom Availability Section (REMOVED) -->
+        </div>
+    </div>
+    
+    <!-- Toast Notification --><div id="toast" class="fixed bottom-5 right-5 bg-red-600 text-white py-2 px-4 rounded-lg shadow-lg transition-all duration-300 opacity-0 transform translate-y-2">
+        <p id="toast-message"></p>
+    </div>
+
+    <!-- Invoice Modal --><div id="invoice-modal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+            <div id="invoice-content" class="p-8 text-slate-800">
+                <h2 class="text-2xl font-bold text-center mb-1" id="invoice-store-name"></h2>
+                <p class="text-center text-sm text-slate-500 mb-6 tracking-widest">INVOICE</p>
+                
+                <div class="flex justify-between mb-6 text-sm">
+                    <div>
+                        <p class="font-semibold text-slate-500">CUSTOMER</p>
+                        <p id="invoice-employee-name" class="font-medium"></p>
+                    </div>
+                    <div class="text-right">
+                         <p class="font-semibold text-slate-500">DATE</p>
+                        <p id="invoice-date" class="font-medium"></p>
+                    </div>
+                </div>
+
+                <table class="w-full text-sm mb-6">
+                    <thead class="border-b-2 border-slate-200">
+                        <tr>
+                            <th class="text-left font-semibold p-2 text-slate-500">ITEM</th>
+                            <th class="text-center font-semibold p-2 text-slate-500">QTY</th>
+                            <th class="text-right font-semibold p-2 text-slate-500">PRICE</th>
+                            <th class="text-right font-semibold p-2 text-slate-500">TOTAL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="invoice-items-table" class="divide-y divide-slate-200">
+                        <!-- Items here --></tbody>
+                </table>
+                
+                <div class="border-t border-slate-200 pt-4 space-y-2 text-sm">
+                    <div class="flex justify-between text-slate-600"><span>Subtotal</span><span id="invoice-subtotal"></span></div>
+                    <div class="flex justify-between text-amber-600"><span>Discount</span><span id="invoice-discount"></span></div>
+                    <div class="flex justify-between text-xl font-bold text-black"><span>TOTAL</span><span id="invoice-total"></span></div>
+                </div>
+            </div>
+            <div class="bg-slate-50 p-4 flex justify-end gap-4 rounded-b-lg">
+                <button id="close-invoice-button" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2 px-4 rounded-lg transition-colors">Close</button>
+                <button id="print-invoice-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold py-2 px-4 rounded-lg transition-colors">Print Invoice</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+    let employeesData = [];
+    let foodItemsData = [];
+    let settingsData = {};
+    let currentOrder = [];
+    let currentEmployee = null;
+    let transactions = [];
+    let isManualDiscountApplied = false;
+
+    // --- Elements for live connection ---
+    const setupSection = document.getElementById('setup-section');
+    const appSection = document.getElementById('app-section');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const headerSubtitle = document.getElementById('header-subtitle');
+    
+    // --- POS Functionality ---
+    const rfidInput = document.getElementById('rfid-input');
+    const findEmployeeButton = document.getElementById('find-employee-button');
+    const employeeDetailsDiv = document.getElementById('employee-details');
+    const orderListDiv = document.getElementById('current-order-list');
+    const rfidScanArea = document.getElementById('rfid-scan-area');
+    const employeeActions = document.getElementById('employee-actions');
+    const clearEmployeeButton = document.getElementById('clear-employee-button');
+    const refreshDataButton = document.getElementById('refresh-data-button');
+    const manualDiscountButton = document.getElementById('manual-discount-button');
+    const foodMenuGrid = document.getElementById('food-menu-grid');
+    const availabilityList = document.getElementById('availability-list');
+    const transactionLog = document.getElementById('transaction-log');
+    
+    // This element is no longer used, but we keep the variable to avoid errors
+    const halfPlateAvailabilityList = document.getElementById('half-plate-availability-list'); 
+
+    window.addEventListener('load', connectAndLoad);
+
+    async function connectAndLoad() {
+        const url = "https://script.google.com/macros/s/AKfycbz5xdEWhNuxgAtLSAiUJil05y7s65uO3-big9M3gfLnSJo6TsgZw_GZ-_eqHlPrdlk2/exec";
+        
+        try {
+            const response = await fetch(`${url}?action=load`);
+            if (!response.ok) throw new Error(`HTTP Error: ${response.statusText}`);
+            const data = await response.json();
+
+            if (data.error) throw new Error(data.error);
+            
+            settingsData = {};
+
+            // Process data from Google Sheets
+            employeesData = data.employees.map(row => ({ RFID_UID: row[0], EmployeeID: row[1], EmployeeName: row[2], Department: row[3], SpecialDiscount: row[4] }));
+            foodItemsData = data.foodItems.map(row => ({ ItemName: row[0], Price: parseFloat(row[1]), HalfPrice: row[2] ? parseFloat(row[2]) : null, available: false, halfAvailable: false }));
+            data.settings.forEach(row => { settingsData[row[0]] = row[1]; });
+            
+            const transactionMap = new Map();
+            (data.transactions || []).forEach(row => {
+                const timestamp = row[0];
+                const key = `${timestamp}-${row[1] || ''}-${row[2] || ''}`;
+                if (!transactionMap.has(key)) {
+                    transactionMap.set(key, {
+                        employee: row[1], employeeId: row[2], items: [], subtotal: 0,
+                        discount: parseFloat(row[8]) || 0, total: parseFloat(row[9]) || 0, timestamp: new Date(timestamp)
+                    });
+                }
+                const transaction = transactionMap.get(key);
+                if(row[3]) { // Ensure item name exists
+                    transaction.items.push({ name: row[3], plateSize: row[4], quantity: row[5], price: row[6] });
+                    transaction.subtotal += (parseFloat(row[6] || 0) * parseInt(row[5] || 0));
+                }
+            });
+            transactions = Array.from(transactionMap.values()).sort((a, b) => b.timestamp - a.timestamp);
+            
+            initializeApp();
+        
+        } catch(error) {
+            showToast(`Failed to load data: ${error.message}`, 'error');
+            loadingIndicator.classList.add('hidden');
+            headerSubtitle.textContent = 'Connection Failed!';
+            setupSection.classList.remove('hidden');
+        }
+    }
+
+    function initializeApp() {
+        document.getElementById('store-name').textContent = settingsData.StoreName || 'Canteen POS System';
+        
+        renderAvailabilityList();
+        renderMenu();
+
+        updateTransactionLog();
+        loadingIndicator.classList.add('hidden');
+        headerSubtitle.textContent = 'System is live and ready.';
+        appSection.classList.remove('hidden');
+        setupSection.classList.add('hidden');
+        rfidInput.focus();
+    }
+
+    function renderAvailabilityList() {
+        availabilityList.innerHTML = foodItemsData.map(item => {
+            const halfPlateToggle = (item.HalfPrice || item.Price) ? `
+                <div class="pl-4 mt-2 ${!item.available ? 'hidden' : ''}" id="half-toggle-container-${item.ItemName.replace(/\s+/g, '-') }">
+                    <div class="flex justify-between items-center bg-gray-100 p-2 rounded-md">
+                        <span class="text-xs font-medium text-gray-500">Half Plate</span>
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" data-item-name="${item.ItemName}" data-type="half" class="sr-only peer availability-toggle" ${item.halfAvailable ? 'checked' : ''}>
+                            <div class="relative w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#D4DF36]"></div>
+                        </label>
+                    </div>
+                </div>
+            ` : '';
+
+            return `
+            <div class="bg-gray-100 p-2 rounded-lg">
+                <div class="flex justify-between items-center">
+                    <span class="text-sm font-medium text-gray-600">${item.ItemName}</span>
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" data-item-name="${item.ItemName}" data-type="main" class="sr-only peer availability-toggle" ${item.available ? 'checked' : ''}>
+                        <div class="relative w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#92CF50]"></div>
+                    </label>
+                </div>
+                ${halfPlateToggle}
+            </div>
+        `}).join('');
+    }
+
+    function renderMenu() {
+        const availableItems = foodItemsData.filter(item => item.available);
+        if (availableItems.length === 0) {
+            foodMenuGrid.innerHTML = `<p class="text-gray-500 col-span-full text-center">No items are currently available.</p>`;
+            return;
+        }
+        foodMenuGrid.innerHTML = availableItems.map(item => {
+            const halfPrice = item.HalfPrice ? item.HalfPrice : (item.Price / 2);
+            if (item.halfAvailable) {
+                return `
+                <div class="menu-item bg-white p-2 rounded-lg shadow-sm flex flex-col justify-between border border-gray-200">
+                    <div class="font-semibold text-gray-700 p-1">${item.ItemName}</div>
+                    <div class="mt-1 grid grid-cols-2 gap-1 text-xs">
+                        <button class="bg-[#D4E5E8] text-[#044928] hover:bg-[#92CF50] font-bold py-2 rounded-md transition menu-action-btn" data-item-name="${item.ItemName}" data-plate-size="Half" data-price="${halfPrice}">
+                            <div>Half</div>
+                            <div>${settingsData.CurrencySymbol || ''}${halfPrice.toFixed(2)}</div>
+                        </button>
+                        <button class="bg-[#92CF50]/30 text-[#044928] hover:bg-[#92CF50] font-bold py-2 rounded-md transition menu-action-btn" data-item-name="${item.ItemName}" data-plate-size="Full" data-price="${item.Price}">
+                            <div>Full</div>
+                            <div>${settingsData.CurrencySymbol || ''}${item.Price}</div>
+                        </button>
+                    </div>
+                </div>`;
+            } else {
+                return `
+                <button class="menu-item bg-[#92CF50]/30 text-[#044928] hover:bg-[#92CF50] border border-[#92CF50]/50 text-left p-3 rounded-lg transition-all duration-200 transform hover:-translate-y-1 shadow-sm hover:shadow-lg cursor-pointer menu-action-btn" data-item-name="${item.ItemName}" data-plate-size="Full" data-price="${item.Price}">
+                    <div class="font-semibold">${item.ItemName}</div>
+                    <div class="text-sm mt-2 font-medium">${settingsData.CurrencySymbol || ''}${item.Price}</div>
+                </button>`;
+            }
+        }).join('');
+    }
+    
+    foodMenuGrid.addEventListener('click', (e) => {
+        const actionButton = e.target.closest('.menu-action-btn');
+        if (!actionButton) return;
+        
+        const itemName = actionButton.dataset.itemName;
+        const plateSize = actionButton.dataset.plateSize;
+        const price = parseFloat(actionButton.dataset.price);
+
+        const itemData = foodItemsData.find(item => item.ItemName === itemName);
+
+        if (itemData && itemData.available) {
+             addItemToOrder(itemName, plateSize, price);
+        }
+    });
+
+    availabilityList.addEventListener('change', (e) => {
+        if (e.target.classList.contains('availability-toggle')) {
+            const itemName = e.target.dataset.itemName;
+            const toggleType = e.target.dataset.type;
+            const isChecked = e.target.checked;
+            const itemData = foodItemsData.find(item => item.ItemName === itemName);
+            
+            if(itemData) {
+                if(toggleType === 'main') {
+                    itemData.available = isChecked;
+                    if (!isChecked) {
+                        itemData.halfAvailable = false;
+                    }
+                } else if (toggleType === 'half') {
+                    itemData.halfAvailable = isChecked;
+                }
+            }
+            renderAvailabilityList(); // Re-render the list to show/hide half-plate toggle
+            renderMenu();
+            rfidInput.focus(); // <-- ADDED THIS LINE TO FIX SCROLLING
+        }
+    });
+
+    findEmployeeButton.addEventListener('click', findEmployee);
+    rfidInput.addEventListener('keypress', (e) => {
+        if(e.key === 'Enter') findEmployee();
+    });
+    
+    orderListDiv.addEventListener('click', (e) => {
+        const target = e.target.closest('button');
+        if (!target) return;
+        const action = target.dataset.action;
+        const itemIdentifier = target.dataset.itemIdentifier;
+        if (!action || !itemIdentifier) return;
+        
+        const [itemName, plateSize] = itemIdentifier.split('-');
+
+        if (action === 'increase') {
+             const item = currentOrder.find(i => i.name === itemName && i.plateSize === plateSize);
+             if (item) addItemToOrder(itemName, plateSize, item.price);
+        }
+        else if (action === 'decrease') decreaseItemQuantity(itemName, plateSize);
+        else if (action === 'remove') removeItemFromOrder(itemName, plateSize);
+    });
+
+    clearEmployeeButton.addEventListener('click', () => {
+        currentEmployee = null;
+        isManualDiscountApplied = false;
+        manualDiscountButton.disabled = true;
+        rfidInput.value = '';
+        employeeDetailsDiv.classList.add('hidden');
+        employeeActions.classList.add('hidden');
+        rfidScanArea.classList.remove('hidden');
+        updateOrder();
+        rfidInput.focus();
+    });
+
+    function findEmployee(){
+        const rfid = rfidInput.value.trim();
+        if(!rfid) return;
+        
+        rfidScanArea.classList.add('hidden');
+        employeeActions.classList.remove('hidden');
+        
+        const employee = employeesData.find(emp => String(emp.RFID_UID).replace(/^0+/, '') === rfid.replace(/^0+/, ''));
+        
+        if (employee) {
+            currentEmployee = employee;
+            manualDiscountButton.disabled = false;
+            employeeDetailsDiv.innerHTML = `
+                <p><span class="font-semibold text-slate-500">Name:</span> ${employee.EmployeeName}</p>
+                <p><span class="font-semibold text-slate-500">ID:</span> ${employee.EmployeeID}</p>
+                <p><span class="font-semibold text-slate-500">Dept:</span> ${employee.Department}</p>
+            `;
+            showToast(`Employee ${employee.EmployeeName} selected.`, 'success');
+        } else {
+            currentEmployee = null;
+            manualDiscountButton.disabled = true;
+            employeeDetailsDiv.innerHTML = `<p class="text-red-500 font-semibold">Employee not found with this RFID.</p>`;
+            showToast('Employee not found.', 'error');
+        }
+        employeeDetailsDiv.classList.remove('hidden');
+        updateOrder();
+    }
+    
+    function addItemToOrder(itemName, plateSize, price) {
+        const itemData = foodItemsData.find(item => item.ItemName === itemName);
+        if(!itemData || !itemData.available) {
+            showToast(`${itemName} is currently unavailable.`, 'error');
+            return;
+        };
+
+        const existingItem = currentOrder.find(item => item.name === itemName && item.plateSize === plateSize);
+        if(existingItem) {
+            existingItem.quantity++;
+        } else {
+            currentOrder.push({ name: itemName, price: price, quantity: 1, plateSize: plateSize });
+        }
+        updateOrder();
+    }
+    
+    function decreaseItemQuantity(itemName, plateSize) {
+        const existingItem = currentOrder.find(item => item.name === itemName && item.plateSize === plateSize);
+        if (!existingItem) return;
+        existingItem.quantity--;
+        if (existingItem.quantity <= 0) removeItemFromOrder(itemName, plateSize);
+        else updateOrder();
+    }
+
+    function removeItemFromOrder(itemName, plateSize) {
+        currentOrder = currentOrder.filter(item => !(item.name === itemName && item.plateSize === plateSize));
+        updateOrder();
+    }
+
+    function updateOrder() {
+        const currency = settingsData.CurrencySymbol || '';
+        
+        if (currentOrder.length === 0) {
+            orderListDiv.innerHTML = `<p class="text-center text-gray-400 py-8">No items in order.</p>`;
+        } else {
+            orderListDiv.innerHTML = currentOrder.map(item => {
+                const itemIdentifier = `${item.name}-${item.plateSize}`;
+                return `
+                <div class="py-3 flex justify-between items-center text-sm">
+                    <div>
+                        <p class="font-semibold text-gray-700">${item.name} <span class="text-xs text-gray-500">(${item.plateSize})</span></p>
+                        <p class="text-gray-500">${currency}${item.price.toFixed(2)}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button class="qty-btn" data-action="decrease" data-item-identifier="${itemIdentifier}">-</button>
+                        <span class="w-5 text-center font-medium">${item.quantity}</span>
+                        <button class="qty-btn" data-action="increase" data-item-identifier="${itemIdentifier}">+</button>
+                        <div class="font-semibold w-16 text-right text-gray-700">${currency}${(item.quantity * item.price).toFixed(2)}</div>
+                        <button class="remove-btn text-xs" data-action="remove" data-item-identifier="${itemIdentifier}">✕</button>
+                    </div>
+                </div>
+            `}).join('');
+        }
+        
+        const subtotal = currentOrder.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+        let discountAmount = 0;
+
+        if (currentEmployee) {
+            if (isManualDiscountApplied) {
+                discountAmount = subtotal;
+            } else if (currentEmployee.SpecialDiscount === true || String(currentEmployee.SpecialDiscount).toLowerCase() === 'true') {
+                discountAmount = subtotal;
+            } else if (settingsData.DiscountPercentage) {
+                const discountPercentage = parseFloat(settingsData.DiscountPercentage) || 0;
+                discountAmount = subtotal * discountPercentage;
+            }
+        }
+        
+        const total = subtotal - discountAmount;
+        const totalItems = currentOrder.reduce((acc, item) => acc + item.quantity, 0);
+
+        document.getElementById('num-items').textContent = totalItems;
+        document.getElementById('subtotal').textContent = `${currency} ${subtotal.toFixed(2)}`;
+        document.getElementById('discount').textContent = `- ${currency} ${discountAmount.toFixed(2)}`;
+        
+        if (isManualDiscountApplied) {
+            manualDiscountButton.textContent = 'Remove 100%';
+            manualDiscountButton.classList.remove('bg-[#92CF50]', 'hover:bg-[#D4DF36]', 'text-black');
+            manualDiscountButton.classList.add('bg-red-500', 'hover:bg-red-600', 'text-white');
+        } else {
+            manualDiscountButton.textContent = 'Apply 100%';
+            manualDiscountButton.classList.remove('bg-red-500', 'hover:bg-red-600', 'text-white');
+            manualDiscountButton.classList.add('bg-[#92CF50]', 'hover:bg-[#D4DF36]', 'text-black');
+        }
+        
+        document.getElementById('total').textContent = `${currency} ${total.toFixed(2)}`;
+        document.getElementById('confirm-purchase-button').disabled = (currentOrder.length === 0 || !currentEmployee);
+    }
+    
+    document.getElementById('clear-order-button').addEventListener('click', () => {
+        currentOrder = [];
+        updateOrder();
+    });
+
+    async function saveTransactionToSheet(transaction) {
+        const url = "https://script.google.com/macros/s/AKfycbz5xdEWhNuxgAtLSAiUJil05y7s65uO3-big9M3gfLnSJo6TsgZw_GZ-_eqHlPrdlk2/exec";
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ action: 'recordSale', transactionData: transaction })
+            });
+            const result = await response.json();
+            if (result.status !== 'success') {
+                throw new Error(result.message);
+            }
+        } catch (error) {
+            showToast(`Failed to save transaction: ${error.message}`, 'error');
+        }
+    }
+
+    document.getElementById('confirm-purchase-button').addEventListener('click', () => {
+        if(currentOrder.length === 0 || !currentEmployee) return;
+
+        const subtotal = currentOrder.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+        let discountAmount = 0;
+        if (currentEmployee) {
+             if (isManualDiscountApplied || (currentEmployee.SpecialDiscount === true || String(currentEmployee.SpecialDiscount).toLowerCase() === 'true')) {
+                discountAmount = subtotal;
+            } else if (settingsData.DiscountPercentage) {
+                const discountPercentage = parseFloat(settingsData.DiscountPercentage) || 0;
+                discountAmount = subtotal * discountPercentage;
+            }
+        }
+        const total = subtotal - discountAmount;
+        
+        const transaction = {
+            employee: currentEmployee.EmployeeName,
+            employeeId: currentEmployee.EmployeeID,
+            items: [...currentOrder],
+            subtotal: subtotal,
+            discount: discountAmount,
+            total: total,
+            timestamp: new Date()
+        };
+        
+        transactions.unshift(transaction);
+        updateTransactionLog();
+        showInvoice(transaction);
+        
+        saveTransactionToSheet(transaction);
+    });
+    
+    manualDiscountButton.addEventListener('click', () => {
+        isManualDiscountApplied = !isManualDiscountApplied;
+        updateOrder();
+    });
+
+    function updateTransactionLog() {
+        const logDiv = document.getElementById('transaction-log');
+        const currency = settingsData.CurrencySymbol || '';
+        if (transactions.length === 0) {
+            logDiv.innerHTML = `<p class="text-center text-gray-400">No transactions yet.</p>`;
+        } else {
+            logDiv.innerHTML = transactions.map((t, index) => `
+                <button class="w-full p-3 bg-gray-100 rounded-lg text-sm text-left hover:bg-gray-200 transition-colors" data-transaction-index="${index}">
+                    <div class="flex justify-between items-center">
+                        <p class="font-semibold text-gray-700">${t.employee}</p>
+                        <p class="font-bold text-[#044928]">${currency}${t.total.toFixed(2)}</p>
+                    </div>
+                    <p class="text-xs text-gray-500">${t.timestamp.toLocaleTimeString()}</p>
+                </button>
+            `).join('');
+        }
+    }
+    
+    transactionLog.addEventListener('click', (e) => {
+        const transactionButton = e.target.closest('button');
+        if (transactionButton && transactionButton.dataset.transactionIndex) {
+            const index = parseInt(transactionButton.dataset.transactionIndex, 10);
+            const transaction = transactions[index];
+            if (transaction) {
+                showInvoice(transaction, false); // false = don't reset order
+            }
+        }
+    });
+
+    refreshDataButton.addEventListener('click', async () => {
+        const refreshIcon = document.getElementById('refresh-icon');
+        const refreshSpinner = document.getElementById('refresh-spinner');
+
+        refreshIcon.classList.add('hidden');
+        refreshSpinner.classList.remove('hidden');
+        refreshDataButton.disabled = true;
+        headerSubtitle.textContent = 'Refreshing data...';
+
+        try {
+            await connectAndLoad();
+            showToast('Data refreshed successfully!', 'success');
+        } catch (e) {
+            // Error is handled in connectAndLoad
+        } finally {
+            refreshIcon.classList.remove('hidden');
+            refreshSpinner.classList.add('hidden');
+            refreshDataButton.disabled = false;
+        }
+    });
+
+    document.getElementById('preview-invoice-button').addEventListener('click', showLastInvoice);
+    document.getElementById('close-invoice-button').addEventListener('click', () => {
+        document.getElementById('invoice-modal').classList.add('hidden');
+        
+        // Only reset the order if the invoice was triggered by a new sale
+        if (currentOrder.length > 0) {
+            showToast('Purchase Confirmed!', 'success');
+            currentOrder = [];
+            clearEmployeeButton.click();
+            updateOrder();
+        }
+    });
+    document.getElementById('print-invoice-button').addEventListener('click', printInvoice);
+    document.getElementById('print-log-button').addEventListener('click', () => window.print());
+
+    document.getElementById('export-log-button').addEventListener('click', () => {
+        const startDate = document.getElementById('start-date').value;
+        const endDate = document.getElementById('end-date').value;
+        
+        if (!startDate || !endDate) {
+            showToast('Please select both a "From" and "To" date to export.', 'error');
+            return;
+        }
+
+        let filteredTransactions = transactions;
+
+        if (startDate && endDate) {
+            const start = new Date(startDate).getTime();
+            const end = new Date(endDate).setHours(23, 59, 59, 999);
+            filteredTransactions = transactions.filter(t => t.timestamp.getTime() >= start && t.timestamp.getTime() <= end);
+        }
+        
+        if (filteredTransactions.length === 0) {
+            showToast('No transactions in selected date range.', 'error');
+            return;
+        }
+
+        const flattenedData = [];
+        filteredTransactions.forEach(t => {
+            t.items.forEach((item, index) => {
+                flattenedData.push({
+                    "Timestamp": t.timestamp.toLocaleString(),
+                    "Employee Name": t.employee,
+                    "Employee ID": t.employeeId,
+                    "Item Name": item.name,
+                    "Plate Size": item.plateSize,
+                    "Quantity": item.quantity,
+                    "Unit Price": item.price,
+                    "Item Subtotal": item.quantity * item.price,
+                    "Order Discount": index === 0 ? t.discount.toFixed(2) : "",
+                    "Order Total": index === 0 ? t.total.toFixed(2) : ""
+                });
+            });
+        });
+
+        const totalQty = filteredTransactions.reduce((sum, t) => sum + t.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0);
+        const totalSubtotal = filteredTransactions.reduce((sum, t) => sum + t.subtotal, 0);
+        const totalDiscount = filteredTransactions.reduce((sum, t) => sum + t.discount, 0);
+        const totalOrderTotal = filteredTransactions.reduce((sum, t) => sum + t.total, 0);
+
+        flattenedData.push({}); // Spacer row
+        flattenedData.push({
+            "Timestamp": "", "Employee Name": "GRAND TOTAL",
+            "Quantity": totalQty, "Item Subtotal": totalSubtotal.toFixed(2),
+            "Order Discount": totalDiscount.toFixed(2), "Order Total": totalOrderTotal.toFixed(2)
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(flattenedData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
+
+        const today = new Date().toISOString().slice(0, 10);
+        const fileName = startDate && endDate ? `Canteen_Transactions_${startDate}_to_${endDate}.xlsx` : `Canteen_Transactions_${today}.xlsx`;
+        XLSX.writeFile(workbook, fileName);
+        showToast('Transaction log exported successfully!', 'success');
+    });
+    
+    function showLastInvoice() {
+        if (transactions.length === 0) {
+            showToast('No transactions have been made yet.', 'error');
+            return;
+        }
+        showInvoice(transactions[0], false); // false = don't reset order
+    }
+
+    function showInvoice(transaction, isNewSale = true) {
+        if (!transaction) return;
+        const currency = settingsData.CurrencySymbol || '';
+        
+        document.getElementById('invoice-store-name').textContent = settingsData.StoreName || 'Canteen';
+        document.getElementById('invoice-employee-name').textContent = transaction.employee;
+        document.getElementById('invoice-date').textContent = transaction.timestamp.toLocaleString();
+        
+        const itemsTable = document.getElementById('invoice-items-table');
+        itemsTable.innerHTML = transaction.items.map(item => `
+            <tr>
+                <td class="p-2">${item.name} <span class="text-xs text-slate-500">(${item.plateSize})</span></td>
+                <td class="p-2 text-center">${item.quantity}</td>
+                <td class="p-2 text-right">${currency}${item.price.toFixed(2)}</td>
+                <td class="p-2 text-right">${currency}${(item.price * item.quantity).toFixed(2)}</td>
+            </tr>
+        `).join('');
+
+        document.getElementById('invoice-subtotal').textContent = `${currency}${transaction.subtotal.toFixed(2)}`;
+        document.getElementById('invoice-discount').textContent = `- ${currency}${transaction.discount.toFixed(2)}`;
+        document.getElementById('invoice-total').textContent = `${currency}${transaction.total.toFixed(2)}`;
+        
+        // This logic ensures the order only resets when it's a *new* sale
+        document.getElementById('close-invoice-button').onclick = () => {
+             document.getElementById('invoice-modal').classList.add('hidden');
+             if(isNewSale) {
+                showToast('Purchase Confirmed!', 'success');
+                currentOrder = [];
+                clearEmployeeButton.click();
+                updateOrder();
+             }
+        };
+
+        document.getElementById('invoice-modal').classList.remove('hidden');
+    }
+
+    function printInvoice() {
+        const invoiceContent = document.getElementById('invoice-content').innerHTML;
+        const printWindow = window.open('', '', 'height=600,width=800');
+        printWindow.document.write('<html><head><title>Print Invoice</title>');
+        printWindow.document.write(`<style> body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #333; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; } th { background-color: #f2f2f2; font-weight: 600; color: #555; } .text-center { text-align: center; } .text-right { text-align: right; } .font-bold { font-weight: bold; } .text-2xl { font-size: 1.5rem; } .mb-1 { margin-bottom: 0.25rem; } .mb-6 { margin-bottom: 1.5rem; } .flex { display: flex; } .justify-between { justify-content: space-between; } .font-medium { font-weight: 500; } .text-slate-500 { color: #64748b; } .text-lg { font-size: 1.125rem; } </style>`);
+        printWindow.document.write('</head><body>');
+        printWindow.document.write(invoiceContent);
+        printWindow.document.write('</body></html>');
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => { printWindow.print(); }, 200);
+    }
+
+    function showToast(message, type = 'success') {
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toast-message');
+        toast.className = 'fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg transition-all duration-300 opacity-0 transform translate-y-2';
+        toast.classList.add(type === 'error' ? 'bg-red-600' : 'bg-green-600');
+        toastMessage.textContent = message;
+        
+        setTimeout(() => {
+            toast.classList.remove('opacity-0', 'translate-y-2');
+        }, 10);
+
+        setTimeout(() => {
+            toast.classList.add('opacity-0', 'translate-y-2');
+        }, 3000);
+    }
+
+</script>
+</body>
+</html>
+
