@@ -104,7 +104,8 @@
             #app-section .sticky, /* Hides current order */
             #transaction-log-header .flex,
             #export-filters,
-            #availability-section { /* Hide availability on print */
+            #availability-section,
+            #invoice-modal { /* Hide the modal itself */
                 display: none;
             }
             #app-section, #transaction-log-container {
@@ -166,6 +167,7 @@
             <div class="text-center">
                  <h1 id="store-name" class="text-2xl md:text-3xl font-bold text-[#044928] tracking-tight">Live Canteen POS System</h1>
                  <p id="header-subtitle" class="text-sm text-slate-500 mt-1">System is live and ready.</p>
+                 <p class="text-xs text-slate-400 mt-1">Cashier: <span id="cashier-display" class="font-medium text-slate-600"></span></p>
             </div>
             <button id="refresh-data-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold p-3 rounded-full text-sm flex items-center justify-center disabled:opacity-50 transition-colors" title="Refresh Data">
                 <svg id="refresh-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M20 4l-4 4M4 20l4-4"></path></svg>
@@ -173,7 +175,20 @@
             </button>
         </header>
 
-        <!-- Main Application Section --><div id="app-section">
+        <!-- Setup Section (Initially hidden, shown on error) --><div id="setup-section" class="card p-6 rounded-xl mb-8 max-w-2xl mx-auto hidden">
+             <div class="text-center">
+                <h2 class="text-2xl font-semibold mb-4 text-red-500">Connection Failed</h2>
+                <p class="text-slate-600 mb-4">Could not load data from the script. Please check the troubleshooting steps in the Google Apps Script file and try deploying your script again.</p>
+            </div>
+        </div>
+        
+        <!-- This spinner is now hidden by default and only shown by connectAndLoad -->
+        <div id="app-loader" class="flex justify-center items-center py-16 hidden">
+            <div class="spinner w-16 h-16 rounded-full border-4"></div>
+        </div>
+
+
+        <!-- Main Application Section --><div id="app-section" class="hidden">
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
                 
                 <!-- Left Column: Availability -->
@@ -191,11 +206,8 @@
                         <h2 class="text-xl font-semibold mb-4 text-slate-700">Employee Scan</h2>
                         <div id="rfid-scan-area">
                             <div class="flex gap-4">
-                                <input type="text" id="rfid-input" placeholder="Enter RFID UID..." class="flex-grow bg-white border border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-[#92CF50] transition text-slate-800">
-                                <button id="find-employee-button" class="bg-[#92CF50] hover:bg-[#D4DF36] text-black font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition">
-                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                                    Find
-                                </button>
+                                <input type="text" id="rfid-input" placeholder="Scan RFID Card..." readonly class="flex-grow bg-white border border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-[#92CF50] transition text-slate-800">
+                                <!-- Find button removed -->
                             </div>
                         </div>
                         <div id="employee-details" class="mt-4 p-4 bg-slate-100 rounded-lg hidden">
@@ -282,7 +294,8 @@
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
             <div id="invoice-content" class="p-8 text-slate-800">
                 <h2 class="text-2xl font-bold text-center mb-1" id="invoice-store-name"></h2>
-                <p class="text-center text-sm text-slate-500 mb-6 tracking-widest">INVOICE</p>
+                <p class="text-center text-sm text-slate-500 mb-2 tracking-widest">INVOICE</p>
+                <p class="text-center text-xs text-slate-400 mb-6" id="invoice-cashier"></p>
                 
                 <div class="flex justify-between mb-6 text-sm">
                     <div>
@@ -329,6 +342,9 @@
     let currentEmployee = null;
     let transactions = [];
     let isManualDiscountApplied = false;
+    let currentInvoiceTransaction = null; // Holds the transaction for the print modal
+    let currentCashierUsername = null; // Holds the logged-in user
+    let rfidScanBuffer = ''; // For global RFID scanning
 
     // --- Elements for live connection ---
     const loginSection = document.getElementById('login-section');
@@ -354,9 +370,40 @@
     const foodMenuGrid = document.getElementById('food-menu-grid');
     const availabilityList = document.getElementById('availability-list');
     const transactionLog = document.getElementById('transaction-log');
+    const appLoader = document.getElementById('app-loader'); // Get the second spinner
+    const appSection = document.getElementById('app-section'); // <-- BUG FIX: Define appSection
+    const cashierDisplay = document.getElementById('cashier-display');
     
     // This element is no longer used, but we keep the variable to avoid errors
     const halfPlateAvailabilityList = document.getElementById('half-plate-availability-list'); 
+
+    // --- Global RFID Listener ---
+    let rfidBufferTimeout = null;
+    document.addEventListener('keydown', (e) => {
+        // Only listen if the main app is visible
+        if (appContainer.classList.contains('hidden')) return;
+
+        // Don't capture input if user is typing in a date field or the RFID field itself
+        if (document.activeElement.type === 'date' || document.activeElement.id === 'rfid-input') return;
+        
+        if (e.key === 'Enter') {
+            if (rfidScanBuffer.length > 0) {
+                rfidInput.value = rfidScanBuffer;
+                findEmployee();
+                rfidScanBuffer = '';
+            }
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+            // Only capture single characters (letters, numbers, symbols)
+            rfidScanBuffer += e.key;
+        }
+        
+        // Clear buffer after a short delay to prevent partial scans from sticking
+        if (rfidBufferTimeout) clearTimeout(rfidBufferTimeout);
+        rfidBufferTimeout = setTimeout(() => {
+            rfidScanBuffer = '';
+        }, 300); // 300ms timeout
+    });
+
 
     loginForm.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -365,7 +412,7 @@
         
         const username = usernameInput.value;
         const password = passwordInput.value;
-        const url = "https://script.google.com/macros/s/AKfycbzFNc6dwAXNyq-yEdmbMr8B5ZkEt2goYPD_fWBM-L8OjyAhO1zQbX_3VklbcgS56BkK/exec";
+        const url = "https://script.google.com/macros/s/AKfycbz5xdEWhNuxgAtLSAiUJil05y7s65uO3-big9M3gfLnSJo6TsgZw_GZ-_eqHlPrdlk2/exec";
 
         fetch(url, {
             method: 'POST',
@@ -375,6 +422,7 @@
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
+                currentCashierUsername = username; // <-- Store the logged-in user
                 loginSection.classList.add('hidden');
                 loadingIndicator.classList.remove('hidden');
                 connectAndLoad();
@@ -413,7 +461,8 @@
                 if (!transactionMap.has(key)) {
                     transactionMap.set(key, {
                         employee: row[1], employeeId: row[2], items: [], subtotal: 0,
-                        discount: parseFloat(row[8]) || 0, total: parseFloat(row[9]) || 0, timestamp: new Date(timestamp)
+                        discount: parseFloat(row[8]) || 0, total: parseFloat(row[9]) || 0, timestamp: new Date(timestamp),
+                        cashier: row[10] || 'N/A' // <-- Get cashier from sheet
                     });
                 }
                 const transaction = transactionMap.get(key);
@@ -435,14 +484,17 @@
 
     function initializeApp() {
         document.getElementById('store-name').textContent = settingsData.StoreName || 'Canteen POS System';
+        cashierDisplay.textContent = currentCashierUsername; // <-- Show logged-in user
         
         renderAvailabilityList();
         renderMenu();
 
         updateTransactionLog();
-        loadingIndicator.classList.add('hidden');
+        loadingIndicator.classList.add('hidden'); // Hide root spinner
+        if(appLoader) appLoader.classList.add('hidden'); // Hide app spinner
         headerSubtitle.textContent = 'System is live and ready.';
         appContainer.classList.remove('hidden'); // Show the main app container
+        appSection.classList.remove('hidden'); // <-- BUG FIX: Show the main app section
         rfidInput.focus();
     }
 
@@ -541,14 +593,14 @@
             }
             renderAvailabilityList(); // Re-render the list to show/hide half-plate toggle
             renderMenu();
-            rfidInput.focus();
+            // Use setTimeout to ensure focus happens *after* DOM re-render
+            setTimeout(() => {
+                rfidInput.focus();
+            }, 0);
         }
     });
 
-    findEmployeeButton.addEventListener('click', findEmployee);
-    rfidInput.addEventListener('keypress', (e) => {
-        if(e.key === 'Enter') findEmployee();
-    });
+    // findEmployeeButton.addEventListener('click', findEmployee); // <-- REMOVED
     
     orderListDiv.addEventListener('click', (e) => {
         const target = e.target.closest('button');
@@ -740,7 +792,8 @@
             subtotal: subtotal,
             discount: discountAmount,
             total: total,
-            timestamp: new Date()
+            timestamp: new Date(),
+            cashier: currentCashierUsername // <-- Add cashier to transaction
         };
         
         transactions.unshift(transaction);
@@ -748,6 +801,9 @@
         showInvoice(transaction);
         
         saveTransactionToSheet(transaction);
+        
+        // Auto-print
+        printInvoice();
     });
     
     manualDiscountButton.addEventListener('click', () => {
@@ -855,7 +911,8 @@
                     "Unit Price": item.price,
                     "Item Subtotal": item.quantity * item.price,
                     "Order Discount": index === 0 ? t.discount.toFixed(2) : "",
-                    "Order Total": index === 0 ? t.total.toFixed(2) : ""
+                    "Order Total": index === 0 ? t.total.toFixed(2) : "",
+                    "Cashier": index === 0 ? t.cashier : "" // <-- Add cashier to export
                 });
             });
         });
@@ -894,9 +951,12 @@
         if (!transaction) return;
         const currency = settingsData.CurrencySymbol || '';
         
+        currentInvoiceTransaction = transaction; // <-- Store for printing
+
         document.getElementById('invoice-store-name').textContent = settingsData.StoreName || 'Canteen';
-        document.getElementById('invoice-employee-name').textContent = transaction.employee;
+        document.getElementById('invoice-employee-name').textContent = `${transaction.employee} (${transaction.employeeId})`;
         document.getElementById('invoice-date').textContent = transaction.timestamp.toLocaleString();
+        document.getElementById('invoice-cashier').textContent = `Cashier: ${transaction.cashier}`; // <-- Show cashier
         
         const itemsTable = document.getElementById('invoice-items-table');
         itemsTable.innerHTML = transaction.items.map(item => `
@@ -927,16 +987,153 @@
     }
 
     function printInvoice() {
-        const invoiceContent = document.getElementById('invoice-content').innerHTML;
-        const printWindow = window.open('', '', 'height=600,width=800');
+        if (!currentInvoiceTransaction) {
+            showToast('No invoice selected to print', 'error');
+            return;
+        }
+
+        const transaction = currentInvoiceTransaction;
+        const currency = settingsData.CurrencySymbol || '';
+        const storeName = settingsData.StoreName || 'Canteen';
+
+        // Build HTML for the receipt
+        let itemsHtml = '';
+        transaction.items.forEach(item => {
+            itemsHtml += `
+                <tr>
+                    <td>${item.name} (${item.plateSize}) x${item.quantity}</td>
+                    <td class="text-right">${currency}${(item.price * item.quantity).toFixed(2)}</td>
+                </tr>
+            `;
+        });
+
+        const receiptHtml = `
+            <div class="invoice-container">
+                <div class="header-info">
+                    <h2>${storeName}</h2>
+                    <p>${transaction.timestamp.toLocaleString()}</p>
+                </div>
+                <div class="customer-info">
+                    <p><strong>Customer:</strong> ${transaction.employee} (${transaction.employeeId})</p>
+                    <p><strong>Cashier:</strong> ${transaction.cashier}</p>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th class="text-right">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${itemsHtml}
+                    </tbody>
+                </table>
+                <div class="totals-section">
+                    <div>
+                        <span>Subtotal:</span>
+                        <span class="text-right">${currency}${transaction.subtotal.toFixed(2)}</span>
+                    </div>
+                    <div>
+                        <span>Discount:</span>
+                        <span class="text-right">-${currency}${transaction.discount.toFixed(2)}</span>
+                    </div>
+                    <div class="total">
+                        <span>TOTAL:</span>
+                        <span class="text-right">${currency}${transaction.total.toFixed(2)}</span>
+                    </div>
+                </div>
+                <p class="text-center" style="margin-top: 15px; font-size: 10px;">Thank you!</p>
+            </div>
+        `;
+
+        // Define styles for the receipt printer
+        const printStyles = `
+            <style>
+                @page {
+                    margin: 0.1in; /* Minimal margins */
+                }
+                body { 
+                    font-family: 'Inter', sans-serif, system-ui; 
+                    color: #000; 
+                    background: #fff; 
+                    width: 300px; /* Approx 80mm width */
+                    font-size: 12px; 
+                    line-height: 1.4;
+                    margin: 0;
+                    padding: 0;
+                }
+                .invoice-container { 
+                    width: 100%; 
+                    padding: 0; 
+                    box-sizing: border-box;
+                }
+                h2 { 
+                    font-size: 16px; 
+                    font-weight: 600; 
+                    text-align: center; 
+                    margin: 10px 0 5px 0; 
+                }
+                p { 
+                    margin: 2px 0; 
+                    font-size: 12px;
+                }
+                .header-info { 
+                    text-align: center; 
+                    border-bottom: 1px dashed #000; 
+                    padding-bottom: 5px; 
+                    margin-bottom: 5px; 
+                }
+                .customer-info { 
+                    margin-bottom: 5px; 
+                }
+                table { 
+                    width: 100%; 
+                    border-collapse: collapse; 
+                    margin-top: 5px; 
+                }
+                th, td { 
+                    padding: 2px 0; 
+                    font-size: 11px; 
+                }
+                th { 
+                    text-align: left; 
+                    border-bottom: 1px solid #000; 
+                    font-weight: 600;
+                    padding-bottom: 2px;
+                }
+                .text-center { text-align: center; }
+                .text-right { text-align: right; }
+                .totals-section { 
+                    border-top: 1px dashed #000; 
+                    padding-top: 5px; 
+                    margin-top: 5px; 
+                    font-size: 12px;
+                }
+                .totals-section div {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 1px;
+                }
+                .totals-section .total {
+                    font-weight: 700;
+                    font-size: 14px;
+                    margin-top: 3px;
+                }
+            </style>
+        `;
+
+        const printWindow = window.open('', '', 'height=600,width=320');
         printWindow.document.write('<html><head><title>Print Invoice</title>');
-        printWindow.document.write(`<style> body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #333; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; } th { background-color: #f2f2f0; font-weight: 600; color: #555; } .text-center { text-align: center; } .text-right { text-align: right; } .font-bold { font-weight: bold; } .text-2xl { font-size: 1.5rem; } .mb-1 { margin-bottom: 0.25rem; } .mb-6 { margin-bottom: 1.5rem; } .flex { display: flex; } .justify-between { justify-content: space-between; } .font-medium { font-weight: 500; } .text-slate-500 { color: #64748b; } .text-lg { font-size: 1.125rem; } </style>`);
+        printWindow.document.write(printStyles);
         printWindow.document.write('</head><body>');
-        printWindow.document.write(invoiceContent);
+        printWindow.document.write(receiptHtml);
         printWindow.document.write('</body></html>');
         printWindow.document.close();
         printWindow.focus();
-        setTimeout(() => { printWindow.print(); }, 200);
+        setTimeout(() => { 
+            printWindow.print(); 
+            printWindow.close(); // Automatically close print window after
+        }, 250);
     }
 
     function showToast(message, type = 'success') {
@@ -958,5 +1155,3 @@
 </script>
 </body>
 </html>
-
-
